@@ -22,8 +22,7 @@ models/*.pt
 models/*.pth
 models/*.pkl
 
-# Results
-results/*.png
+# Results (large/generated files only)
 results/*.pdf
 
 # IDE
