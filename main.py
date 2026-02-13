@@ -56,6 +56,10 @@ def parse_args() -> argparse.Namespace:
         "--physics-weight", type=float, default=0.1,
         help="Final physics loss weight (after annealing).",
     )
+    parser.add_argument(
+        "--survival-weight", type=float, default=0.2,
+        help="Survival loss weight for time-to-breakthrough prediction.",
+    )
 
     # Output
     parser.add_argument(
@@ -140,6 +144,7 @@ def main():
             lstm_layers=args.lstm_layers,
             dropout=args.dropout,
             physics_anneal_end=args.physics_weight,
+            lambda_survival=args.survival_weight,
             model_save_path=args.model_path,
         )
 
@@ -150,6 +155,16 @@ def main():
         metrics = generate_report(
             model, dataset, history, save_dir=args.save_dir, device=device,
         )
+
+    # Survival model summary
+    if "survival_p50_mean" in metrics:
+        print("\n--- Survival Model Percentiles ---")
+        print(f"P10 (optimistic):   {metrics['survival_p10_mean']:.4f}")
+        print(f"P50 (median):       {metrics['survival_p50_mean']:.4f}")
+        print(f"P90 (conservative): {metrics['survival_p90_mean']:.4f}")
+        if "survival_calibration_80" in metrics:
+            print(f"80% interval calibration: "
+                  f"{metrics['survival_calibration_80']:.1%}")
 
     # Analytical comparison
     print("\n--- Analytical Buckley-Leverett Solution ---")

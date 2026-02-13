@@ -296,6 +296,82 @@ def generate_synthetic_volve_data(
     return df
 
 
+def _prepare_survival_targets(
+    df: pd.DataFrame, seq_length: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Prepare survival analysis targets from the dataframe.
+
+    For each sample (after sequencing), computes:
+        - time_to_event: Days until breakthrough if pre-breakthrough,
+          or days since production start if post-breakthrough (observed time).
+          Normalized by max observed time per well for numerical stability.
+        - event: 1 if breakthrough has been observed at this time step, 0 if censored.
+
+    Right-censored samples are those where breakthrough hasn't occurred yet
+    (DAYS_TO_BREAKTHROUGH > 0 means we haven't reached BT).
+
+    Returns:
+        tte: Time-to-event array, shape (n_samples,)
+        event: Event indicator array, shape (n_samples,)
+    """
+    well_col = VOLVE_COLUMNS["well"]
+    days_col = "DAYS_ON_PRODUCTION"
+    bt_col = "BREAKTHROUGH"
+    days_to_bt_col = "DAYS_TO_BREAKTHROUGH"
+
+    # For each row, compute the time-to-event:
+    #   - If pre-breakthrough (BT=0): time = days_to_breakthrough (censored, event=0)
+    #   - If post-breakthrough (BT=1): time = days from production start to BT day (event=1)
+    tte_values = np.zeros(len(df), dtype=np.float32)
+    event_values = np.zeros(len(df), dtype=np.float32)
+
+    for _, group_idx in df.groupby(well_col).groups.items():
+        group = df.loc[group_idx]
+        days = group[days_col].values.astype(np.float32)
+        bt = group[bt_col].values
+        days_to_bt = group[days_to_bt_col].values
+
+        # Find the breakthrough day for this well
+        bt_indices = np.where(bt == 1.0)[0]
+        if len(bt_indices) > 0:
+            bt_day = days[bt_indices[0]]
+        else:
+            bt_day = days[-1]  # Never broke through; use last observed day
+
+        for i, idx in enumerate(group_idx):
+            if bt[i] == 1.0:
+                # Post-breakthrough: event observed, time = breakthrough day
+                tte_values[idx] = max(bt_day, 1.0)
+                event_values[idx] = 1.0
+            else:
+                # Pre-breakthrough: censored at current time
+                # Time = days_to_bt (how many days until BT from this point)
+                # But for survival model we want the total time-to-event
+                remaining = days_to_bt[i]
+                if remaining > 0:
+                    tte_values[idx] = days[i] + remaining
+                    event_values[idx] = 1.0  # We know BT will happen
+                else:
+                    # Well never broke through; censored at current day
+                    tte_values[idx] = max(days[i], 1.0)
+                    event_values[idx] = 0.0
+
+    # Apply sequencing offset (same as create_sequences)
+    tte_seq = tte_values[seq_length:]
+    event_seq = event_values[seq_length:]
+
+    # Normalize time-to-event to reasonable scale (divide by max)
+    max_tte = tte_seq.max()
+    if max_tte > 0:
+        tte_seq = tte_seq / max_tte
+
+    # Ensure minimum time for numerical stability
+    tte_seq = np.clip(tte_seq, 1e-4, None)
+
+    return tte_seq, event_seq
+
+
 def build_dataset(
     data_path: str | None = None,
     seq_length: int = 30,
@@ -365,6 +441,21 @@ def build_dataset(
 
     well_names = df[VOLVE_COLUMNS["well"]].unique().tolist()
 
+    # Survival targets: time-to-breakthrough and censoring indicator
+    tte, event = _prepare_survival_targets(df, seq_length)
+    tte_train = torch.tensor(
+        tte[:split_idx], dtype=torch.float32
+    ).unsqueeze(1).to(device)
+    tte_test = torch.tensor(
+        tte[split_idx:], dtype=torch.float32
+    ).unsqueeze(1).to(device)
+    event_train = torch.tensor(
+        event[:split_idx], dtype=torch.float32
+    ).unsqueeze(1).to(device)
+    event_test = torch.tensor(
+        event[split_idx:], dtype=torch.float32
+    ).unsqueeze(1).to(device)
+
     return {
         "X_train": X_train,
         "y_train": y_train,
@@ -372,6 +463,10 @@ def build_dataset(
         "y_test": y_test,
         "bt_train": bt_train,
         "bt_test": bt_test,
+        "tte_train": tte_train,
+        "tte_test": tte_test,
+        "event_train": event_train,
+        "event_test": event_test,
         "scaler_X": scaler_X,
         "scaler_y": scaler_y,
         "physics_inputs": physics_inputs,

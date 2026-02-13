@@ -27,6 +27,7 @@ from sklearn.metrics import (
 
 from .model import PhysicsInformedBreakthroughModel
 from .physics import compute_breakthrough_time_analytical
+from .survival import compute_survival_function, compute_hazard_function
 
 
 def evaluate_model(
@@ -88,6 +89,41 @@ def evaluate_model(
     metrics["gate_mean"] = float(gate_values.mean())
     metrics["gate_std"] = float(gate_values.std())
 
+    # Survival model metrics
+    if "survival_mu" in outputs:
+        percentiles = outputs["survival_percentiles"]
+        p10 = percentiles["P10"].cpu().numpy().flatten()
+        p50 = percentiles["P50"].cpu().numpy().flatten()
+        p90 = percentiles["P90"].cpu().numpy().flatten()
+
+        metrics["survival_p10_mean"] = float(p10.mean())
+        metrics["survival_p50_mean"] = float(p50.mean())
+        metrics["survival_p90_mean"] = float(p90.mean())
+        metrics["survival_p10_std"] = float(p10.std())
+        metrics["survival_p50_std"] = float(p50.std())
+        metrics["survival_p90_std"] = float(p90.std())
+
+        mu = outputs["survival_mu"].cpu().numpy().flatten()
+        sigma = outputs["survival_sigma"].cpu().numpy().flatten()
+        metrics["survival_mu_mean"] = float(mu.mean())
+        metrics["survival_sigma_mean"] = float(sigma.mean())
+
+        # Calibration: fraction of observed events within P10-P90 interval
+        if "tte_test" in dataset and "event_test" in dataset:
+            tte_true = dataset["tte_test"].cpu().numpy().flatten()
+            event_true = dataset["event_test"].cpu().numpy().flatten()
+            observed_mask = event_true == 1.0
+            if observed_mask.sum() > 0:
+                tte_observed = tte_true[observed_mask]
+                p10_obs = p10[observed_mask]
+                p90_obs = p90[observed_mask]
+                in_interval = (
+                    (tte_observed >= p10_obs) & (tte_observed <= p90_obs)
+                )
+                metrics["survival_calibration_80"] = float(
+                    in_interval.mean()
+                )
+
     return metrics
 
 
@@ -131,6 +167,21 @@ def print_metrics(metrics: dict) -> None:
         print(f"    mu_o (oil viscosity):   {p['mu_o']:.3f} cP")
         print(f"    Mobility ratio M:       {p['mu_w']/p['mu_o']:.3f}")
         print(f"    Porosity:               {p['porosity']:.3f}")
+
+    if "survival_p50_mean" in metrics:
+        print(f"\n  Survival Model (Time-to-Breakthrough):")
+        print(f"    P10 (optimistic):   {metrics['survival_p10_mean']:.4f} "
+              f"(+/- {metrics['survival_p10_std']:.4f})")
+        print(f"    P50 (median):       {metrics['survival_p50_mean']:.4f} "
+              f"(+/- {metrics['survival_p50_std']:.4f})")
+        print(f"    P90 (conservative): {metrics['survival_p90_mean']:.4f} "
+              f"(+/- {metrics['survival_p90_std']:.4f})")
+        print(f"    mu (location):      {metrics['survival_mu_mean']:.4f}")
+        print(f"    sigma (scale):      {metrics['survival_sigma_mean']:.4f}")
+        if "survival_calibration_80" in metrics:
+            cal = metrics["survival_calibration_80"]
+            print(f"    80% interval calibration: {cal:.1%} "
+                  f"(ideal: 80%)")
 
     print("=" * 60)
 
@@ -380,6 +431,129 @@ def plot_fractional_flow_curve(
     print(f"Front saturation: {analytical['s_w_front']:.3f}")
 
 
+def plot_survival_analysis(
+    model: PhysicsInformedBreakthroughModel,
+    dataset: dict,
+    save_dir: str = "results",
+    device: str = "cpu",
+) -> None:
+    """
+    Plot survival analysis results: percentile predictions, survival curves,
+    and hazard function.
+    """
+    save_path = Path(save_dir)
+    save_path.mkdir(parents=True, exist_ok=True)
+
+    model.eval()
+    with torch.no_grad():
+        outputs = model(dataset["X_test"].to(device))
+
+    percentiles = outputs["survival_percentiles"]
+    p10 = percentiles["P10"].cpu().numpy().flatten()
+    p50 = percentiles["P50"].cpu().numpy().flatten()
+    p90 = percentiles["P90"].cpu().numpy().flatten()
+    mu_vals = outputs["survival_mu"].cpu()
+    sigma_vals = outputs["survival_sigma"].cpu()
+
+    has_tte = "tte_test" in dataset and "event_test" in dataset
+    if has_tte:
+        tte_true = dataset["tte_test"].cpu().numpy().flatten()
+        event_true = dataset["event_test"].cpu().numpy().flatten()
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # 1. Percentile predictions over samples
+    ax = axes[0, 0]
+    n_plot = min(500, len(p50))
+    x_range = range(n_plot)
+    ax.fill_between(
+        x_range, p10[:n_plot], p90[:n_plot],
+        alpha=0.3, color="steelblue", label="P10-P90 interval",
+    )
+    ax.plot(x_range, p50[:n_plot], color="steelblue", linewidth=1.5,
+            label="P50 (median)")
+    if has_tte:
+        observed = event_true[:n_plot] == 1.0
+        ax.scatter(
+            np.where(observed)[0], tte_true[:n_plot][observed],
+            s=8, color="red", alpha=0.6, label="Observed BT time",
+            zorder=5,
+        )
+    ax.set_xlabel("Sample Index")
+    ax.set_ylabel("Time to Breakthrough (normalized)")
+    ax.set_title("Predicted Time-to-Breakthrough with Uncertainty")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # 2. Survival curve (using mean predicted parameters)
+    ax = axes[0, 1]
+    mu_mean = mu_vals.mean()
+    sigma_mean = sigma_vals.mean()
+    t_grid = torch.linspace(0.01, 2.0, 200)
+    survival = compute_survival_function(
+        mu_mean.unsqueeze(0), sigma_mean.unsqueeze(0), t_grid
+    ).numpy().flatten()
+    ax.plot(t_grid.numpy(), survival, color="steelblue", linewidth=2)
+
+    # Mark P10, P50, P90 on the survival curve
+    for pval, label, ls in [
+        (0.90, "P10", "--"), (0.50, "P50", "-"), (0.10, "P90", "--")
+    ]:
+        ax.axhline(y=pval, color="gray", linestyle=ls, alpha=0.4)
+        # Find corresponding time
+        idx = np.searchsorted(-survival, -pval)
+        if idx < len(t_grid):
+            t_pct = t_grid[idx].item()
+            ax.axvline(x=t_pct, color="gray", linestyle=ls, alpha=0.4)
+            ax.annotate(
+                label, xy=(t_pct, pval),
+                xytext=(t_pct + 0.05, pval + 0.03),
+                fontsize=9,
+            )
+
+    ax.set_xlabel("Time (normalized)")
+    ax.set_ylabel("Survival Probability S(t)")
+    ax.set_title("Mean Survival Curve")
+    ax.set_ylim(-0.05, 1.05)
+    ax.grid(True, alpha=0.3)
+
+    # 3. Hazard function
+    ax = axes[1, 0]
+    hazard = compute_hazard_function(
+        mu_mean.unsqueeze(0), sigma_mean.unsqueeze(0), t_grid
+    ).numpy().flatten()
+    ax.plot(t_grid.numpy(), hazard, color="darkred", linewidth=2)
+    ax.set_xlabel("Time (normalized)")
+    ax.set_ylabel("Hazard Rate h(t)")
+    ax.set_title("Mean Hazard Function")
+    ax.grid(True, alpha=0.3)
+
+    # 4. P10/P50/P90 distribution histograms
+    ax = axes[1, 1]
+    ax.hist(p10, bins=30, alpha=0.5, color="green", label="P10", density=True)
+    ax.hist(p50, bins=30, alpha=0.5, color="steelblue", label="P50", density=True)
+    ax.hist(p90, bins=30, alpha=0.5, color="orange", label="P90", density=True)
+    if has_tte:
+        observed_tte = tte_true[event_true == 1.0]
+        if len(observed_tte) > 0:
+            ax.hist(
+                observed_tte, bins=30, alpha=0.4, color="red",
+                label="Observed", density=True,
+            )
+    ax.set_xlabel("Time to Breakthrough (normalized)")
+    ax.set_ylabel("Density")
+    ax.set_title("Percentile Distributions")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(
+        save_path / "survival_analysis.png", dpi=150, bbox_inches="tight"
+    )
+    plt.close()
+    print(f"Saved: {save_path / 'survival_analysis.png'}")
+
+
 def generate_report(
     model: PhysicsInformedBreakthroughModel,
     dataset: dict,
@@ -401,6 +575,7 @@ def generate_report(
     plot_training_history(history, save_dir)
     plot_predictions(model, dataset, save_dir, device)
     plot_fractional_flow_curve(model, save_dir)
+    plot_survival_analysis(model, dataset, save_dir, device)
 
     # Save metrics to file
     with open(save_path / "metrics.txt", "w") as f:

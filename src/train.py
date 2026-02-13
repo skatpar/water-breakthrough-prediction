@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .model import PhysicsInformedBreakthroughModel
+from .survival import SurvivalLoss
 
 
 @dataclass
@@ -33,6 +34,7 @@ class TrainConfig:
     lambda_monotonicity: float = 0.05
     lambda_breakthrough: float = 0.3
     lambda_material_balance: float = 0.05
+    lambda_survival: float = 0.2
     # Physics annealing
     physics_anneal_start: float = 0.01
     physics_anneal_end: float = 0.1
@@ -60,6 +62,7 @@ class PhysicsInformedLoss(nn.Module):
         self.config = config
         self.mse = nn.MSELoss()
         self.bce = nn.BCEWithLogitsLoss()
+        self.survival_loss = SurvivalLoss()
 
     def forward(
         self,
@@ -67,6 +70,8 @@ class PhysicsInformedLoss(nn.Module):
         y_true: torch.Tensor,
         bt_true: torch.Tensor | None = None,
         epoch: int = 0,
+        tte: torch.Tensor | None = None,
+        event: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Compute composite loss.
@@ -76,6 +81,8 @@ class PhysicsInformedLoss(nn.Module):
             y_true: Ground truth water cut (batch, 1)
             bt_true: Ground truth breakthrough labels (batch,)
             epoch: Current epoch for annealing
+            tte: Time-to-event for survival loss (batch, 1)
+            event: Event indicator for survival loss (batch, 1)
 
         Returns:
             Dictionary with individual and total loss values
@@ -120,6 +127,17 @@ class PhysicsInformedLoss(nn.Module):
         )
         losses["bounds"] = bound_penalty
 
+        # 7. Survival loss - time-to-breakthrough prediction
+        if tte is not None and event is not None:
+            losses["survival"] = self.survival_loss(
+                outputs["survival_mu"],
+                outputs["survival_sigma"],
+                tte,
+                event,
+            )
+        else:
+            losses["survival"] = torch.tensor(0.0, device=y_true.device)
+
         # Physics weight annealing (ramp up over training)
         if epoch < self.config.physics_anneal_epochs:
             t = epoch / self.config.physics_anneal_epochs
@@ -137,6 +155,7 @@ class PhysicsInformedLoss(nn.Module):
             + self.config.lambda_monotonicity * losses["monotonicity"]
             + self.config.lambda_breakthrough * losses["breakthrough"]
             + self.config.lambda_material_balance * losses["material_balance"]
+            + self.config.lambda_survival * losses["survival"]
             + 0.01 * losses["bounds"]
         )
 
@@ -203,6 +222,10 @@ def train_model(
     X_test = dataset["X_test"]
     y_test = dataset["y_test"]
     bt_test = dataset["bt_test"]
+    tte_train = dataset["tte_train"]
+    tte_test = dataset["tte_test"]
+    event_train = dataset["event_train"]
+    event_test = dataset["event_test"]
 
     n_train = X_train.shape[0]
     n_batches = max(1, n_train // config.batch_size)
@@ -225,7 +248,7 @@ def train_model(
         model.train()
         epoch_losses = {k: 0.0 for k in [
             "total", "data", "physics_fit", "monotonicity",
-            "breakthrough", "material_balance",
+            "breakthrough", "material_balance", "survival",
         ]}
 
         # Shuffle training data
@@ -233,6 +256,8 @@ def train_model(
         X_shuffled = X_train[perm]
         y_shuffled = y_train[perm]
         bt_shuffled = bt_train[perm]
+        tte_shuffled = tte_train[perm]
+        event_shuffled = event_train[perm]
 
         for i in range(n_batches):
             start = i * config.batch_size
@@ -240,10 +265,14 @@ def train_model(
             X_batch = X_shuffled[start:end]
             y_batch = y_shuffled[start:end]
             bt_batch = bt_shuffled[start:end]
+            tte_batch = tte_shuffled[start:end]
+            event_batch = event_shuffled[start:end]
 
             optimizer.zero_grad()
             outputs = model(X_batch)
-            losses = criterion(outputs, y_batch, bt_batch, epoch)
+            losses = criterion(
+                outputs, y_batch, bt_batch, epoch, tte_batch, event_batch
+            )
             losses["total"].backward()
 
             # Gradient clipping
@@ -262,7 +291,9 @@ def train_model(
         model.eval()
         with torch.no_grad():
             val_outputs = model(X_test)
-            val_losses = criterion(val_outputs, y_test, bt_test, epoch)
+            val_losses = criterion(
+                val_outputs, y_test, bt_test, epoch, tte_test, event_test
+            )
             val_loss = val_losses["total"].item()
             val_data_loss = val_losses["data"].item()
 

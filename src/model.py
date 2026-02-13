@@ -22,6 +22,7 @@ from .physics import (
     BuckleyLeverettResidual,
     MonotonicityConstraint,
 )
+from .survival import LogNormalSurvivalHead, compute_percentiles
 
 
 class TemporalEncoder(nn.Module):
@@ -194,6 +195,9 @@ class PhysicsInformedBreakthroughModel(nn.Module):
         # Breakthrough classifier
         self.breakthrough_head = BreakthroughClassifier(hidden_size)
 
+        # Survival head for time-to-breakthrough prediction
+        self.survival_head = LogNormalSurvivalHead(hidden_size)
+
         # Physics loss modules
         self.bl_residual = BuckleyLeverettResidual(
             fractional_flow=self.physics_branch.fractional_flow,
@@ -220,6 +224,9 @@ class PhysicsInformedBreakthroughModel(nn.Module):
                 - saturation: Predicted water saturation (batch, 1)
                 - breakthrough_logit: Breakthrough probability logit (batch, 1)
                 - gate_value: Physics vs data weight (batch, 1)
+                - survival_mu: Log-normal location parameter (batch, 1)
+                - survival_sigma: Log-normal scale parameter (batch, 1)
+                - survival_percentiles: Dict with P10, P50, P90 (batch, 1)
         """
         # Encode temporal sequence
         h = self.encoder(x)
@@ -237,6 +244,12 @@ class PhysicsInformedBreakthroughModel(nn.Module):
         # Breakthrough classification
         bt_logit = self.breakthrough_head(h)
 
+        # Survival prediction for time-to-breakthrough
+        survival_out = self.survival_head(h)
+        percentiles = compute_percentiles(
+            survival_out["mu"], survival_out["sigma"]
+        )
+
         return {
             "water_cut": water_cut,
             "water_cut_physics": f_w_physics,
@@ -244,6 +257,10 @@ class PhysicsInformedBreakthroughModel(nn.Module):
             "saturation": s_w,
             "breakthrough_logit": bt_logit,
             "gate_value": gate,
+            "survival_mu": survival_out["mu"],
+            "survival_log_sigma": survival_out["log_sigma"],
+            "survival_sigma": survival_out["sigma"],
+            "survival_percentiles": percentiles,
         }
 
     def get_physics_parameters(self) -> dict[str, float]:
