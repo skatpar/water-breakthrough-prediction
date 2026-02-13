@@ -320,6 +320,9 @@ def _prepare_survival_targets(
     bt_col = "BREAKTHROUGH"
     days_to_bt_col = "DAYS_TO_BREAKTHROUGH"
 
+    # Reset index so positional and label indices match (filtering may leave gaps)
+    df = df.reset_index(drop=True)
+
     # For each row, compute the time-to-event:
     #   - If pre-breakthrough (BT=0): time = days_to_breakthrough (censored, event=0)
     #   - If post-breakthrough (BT=1): time = days from production start to BT day (event=1)
