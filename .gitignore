@@ -13,14 +13,16 @@ env/
 .venv/
 
 # Data files (large)
-data/*.csv
-data/*.xlsx
+*/data/*.csv
+*/data/*.xlsx
 data/*.parquet
+*.csv
 
 # Model artifacts
 models/*.pt
 models/*.pth
 models/*.pkl
+*.pkl
 
 # Results (large/generated files only)
 results/*.pdf
@@ -37,3 +39,5 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+*/figures/
