@@ -1,0 +1,88 @@
+{
+  "n_events": 13,
+  "n_wells": 17,
+  "epv_unregularized": 1,
+  "epv_regularized": "4-6",
+  "features": [
+    {
+      "feature": "active_wells_at_spud",
+      "c_index": 0.8360655737704918,
+      "coef_sign": "+",
+      "expected_sign": "+",
+      "sign_match": "YES",
+      "physics_interpretation": "More wells \u2192 more depletion \u2192 increased risk",
+      "rationale": "Selected by C-index ranking, passed redundancy filter"
+    },
+    {
+      "feature": "gas_cov_2yr",
+      "c_index": 0.7459016393442623,
+      "coef_sign": "-",
+      "expected_sign": "?",
+      "sign_match": "N/A",
+      "physics_interpretation": "Rate instability \u2192 operational effects \u2192 unclear",
+      "rationale": "Selected by C-index ranking, passed redundancy filter"
+    },
+    {
+      "feature": "peak_gas",
+      "c_index": 0.6967213114754098,
+      "coef_sign": "-",
+      "expected_sign": "+",
+      "sign_match": "NO",
+      "physics_interpretation": "Higher peak \u2192 more drawdown \u2192 increased risk",
+      "rationale": "Selected by C-index ranking, passed redundancy filter, flagged as confounder proxy"
+    },
+    {
+      "feature": "gas_gravity",
+      "c_index": 0.6475409836065574,
+      "coef_sign": "+",
+      "expected_sign": "?",
+      "sign_match": "N/A",
+      "physics_interpretation": "Heavier gas \u2192 higher density \u2192 smaller \u0394\u03c1 \u2192 increased risk",
+      "rationale": "Selected by C-index ranking, passed redundancy filter"
+    },
+    {
+      "feature": "time_to_peak_months",
+      "c_index": 0.610655737704918,
+      "coef_sign": "-",
+      "expected_sign": "-",
+      "sign_match": "YES",
+      "physics_interpretation": "Delayed peak \u2192 ramp-up period \u2192 decreased risk",
+      "rationale": "Selected by C-index ranking, passed redundancy filter"
+    },
+    {
+      "feature": "net_pay_m",
+      "c_index": 0.6065573770491803,
+      "coef_sign": "+",
+      "expected_sign": "-",
+      "sign_match": "NO",
+      "physics_interpretation": "Thicker pay \u2192 more buffer above water \u2192 decreased risk",
+      "rationale": "Selected by C-index ranking, passed redundancy filter, flagged as confounder proxy"
+    },
+    {
+      "feature": "d_to_gwc_m",
+      "c_index": 0.703,
+      "coef_sign": "-",
+      "expected_sign": "-",
+      "sign_match": "YES",
+      "physics_interpretation": "Closer to GWC \u2192 faster breakthrough from GWC rise",
+      "rationale": "Added from Phase 7 GWC position analysis. Correct physics sign. Verticals only (NaN for horizontals)."
+    }
+  ],
+  "dropped_for_redundancy": [
+    "cum_field_water_at_spud",
+    "cum_field_gas_at_spud",
+    "chlorides_ppm",
+    "initial_whfp",
+    "cum_field_gas_at_spud",
+    "initial_whfp",
+    "initial_whfp"
+  ],
+  "dropped_line_pressure": true,
+  "notes": [
+    "EPV constraint limits unregularized model to ~1 feature",
+    "L2 regularized Cox (penalizer=0.1) can support 4-5 features",
+    "Horizontal effective N = 2 (not 5) due to analog-copied statics",
+    "Features with wrong physics sign retained but flagged as confounder proxies",
+    "line_pressure_psig dropped: 62% null, concentrated in most informative time period"
+  ]
+}

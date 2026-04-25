@@ -1,0 +1,6 @@
+Method,Predicted,Actual,Abs Error,Comments
+Kaplan-Meier (field median),284,12,272,Naive baseline; dominated by long-lived verticals
+Sobocinski-Cornelius,<1,12,~12,Predicts instant BT; wrong mechanism (coning vs GWC rise)
+Papatzacos (horizontal),N/A,12,N/A,Inapplicable: lateral extends below GWC (1550m > 754m RKB)
+OLS log(TTE) ~ 3 feats,148,12,136,"R²=0.733; trained on verticals, extrapolated to horizontal"
+Physics insight (GWC position),<12,12,<12,Lateral below GWC → near-immediate water contact; consistent with ~12 mo
