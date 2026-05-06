@@ -81,7 +81,7 @@ RES_DIR.mkdir(parents=True, exist_ok=True)
 GWC_RKB_M = 754.0; CAP = 1200
 # Normalized features: peak_gas_per_m replaces peak_gas_rate
 FEATURES = ['n_wells_producing_at_spud', 'spud_year', 'field_cum_gas_at_spud',
-            'gas_rate_cv_yr12', 'peak_gas_per_m']
+            'gas_rate_cv_yr12', 'peak_gas_per_m', 'sw']
 
 plt.rcParams.update({
     'figure.dpi': 150, 'savefig.dpi': 150, 'savefig.bbox': 'tight',
@@ -387,7 +387,7 @@ for idx, w in enumerate(ro):
     frac = idx / max(len(ro) - 1, 1)
     rf_v[w] = float(sa[0] + frac * (sa[-1] - sa[0]))
 
-ALPHA = 0.45
+ALPHA = 0.55
 blend_v = {w: (1 - ALPHA) * gm_v[w] + ALPHA * rf_v[w] for w in v_wells}
 
 v_mae = np.mean([abs(blend_v[w] - v_actual[w]) for w in v_evt])
